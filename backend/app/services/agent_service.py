@@ -205,7 +205,17 @@ def _fallback_answer(state: AgentState) -> str:
             parts.append(f"[{index}] {label}")
 
     parts.append("")
-    parts.append("> 提示：当前未配置 LLM API Key，以上为知识库检索原文的整理结果。配置 `.env` 中的 `OPENAI_API_KEY` 后可获得更自然的总结回答。")
+    if is_llm_available():
+        # 已配置 Key 但本次调用失败/超时（网络、额度、限流等），不能误报成「未配置」
+        parts.append(
+            "> 提示：本次 LLM 调用失败或超时（可能是网络、额度或限流问题），以上为知识库检索原文的整理结果。"
+            "可稍后重试，或在 `.env` 中调小 `LLM_TIMEOUT`／`LLM_MAX_RETRIES` 以更快回退。"
+        )
+    else:
+        parts.append(
+            "> 提示：当前未配置 LLM API Key，以上为知识库检索原文的整理结果。"
+            "配置 `.env` 中的 `OPENAI_API_KEY` 后可获得更自然的总结回答。"
+        )
     return "\n".join(parts)
 
 

@@ -215,18 +215,22 @@ DEFAULT_CITY=杭州
 
 ### 3.6 运行环境自适应（重要）
 
-这套代码刻意做到了「**依赖缺失也能跑通**」，因为 RAG 依赖链里有几个容易在 Windows 上出问题的原生组件：
+这套代码刻意做到了「**依赖缺失也能跑通**」。正常环境（普通终端、Docker）下 `bge-m3` + Chroma 都能正常工作；
+但在**受限运行环境**（受限沙箱、被禁止创建命名管道的进程、缺少 VC++ 运行库的系统）里，几个原生组件会整体失效：
 
-| 组件 | 出问题时的表现 | 本项目的处理方式 |
+| 组件 | 受限环境下的表现 | 本项目的处理方式 |
 | --- | --- | --- |
 | `torch` / `sentence-transformers` | `WinError 1114 动态链接库(DLL)初始化例程失败`（加载 `c10.dll` 失败） | Embedding 自动降级为内置 `HashingEmbeddings`；`langchain_text_splitters` / `langchain_community.document_loaders` 改为可选依赖，改用内置的递归切分器与 pypdf 加载器 |
 | `chromadb` 原生引擎 | 写入时进程直接**访问违例崩溃**（`0xC0000005`），`try/except` 抓不住 | `VECTOR_BACKEND=auto`（默认）会在**子进程**里探测一次 chromadb，探测失败就自动切到内置 NumPy 向量库（`<collection>.vectors.npy` + `<collection>.records.json`） |
 | `onnxruntime` | 导入即崩溃 | 代码从不使用 Chroma 的默认 ONNX Embedding，始终注入自己的 Embedding 函数 |
-| 未配置 LLM Key | 无法总结/生成自然回答 | 仍会检索知识库并把原文要点整理成结构化回答，界面明确标注「未启用 LLM」，绝不编造 |
+| LLM 未配置或调用失败 | 无法总结/生成自然回答 | 仍会检索知识库并把原文要点整理成结构化回答，并**区分提示**「未配置 Key」与「调用失败/超时」，绝不编造 |
 | 未配置天气 Key | 无法获取真实天气 | 返回稳定可复现的 mock 天气 + 环境适配建议 |
 
+> 实测结论：上述 `torch` / `chromadb` 报错在**解除沙箱限制后会自动消失**——换到普通 `cmd`/`PowerShell`、
+> VSCode 终端或 Docker 里运行，`bge-m3`（约 2.3 GB，首次自动下载）与 Chroma 均可正常工作，无需额外安装 VC++ 运行库。
+
 **降级后的检索质量**：双路检索是「向量 Top10 + BM25 Top10 → RRF 融合 → 词面覆盖度微调 → Top5」。
-使用内置哈希向量器时语义能力弱，系统会自动给 BM25 更高权重；等你在正常环境里跑通 `torch`（能加载 `bge-m3`）后，
+使用内置哈希向量器时语义能力弱，系统会自动给 BM25 更高权重；等环境可加载 `bge-m3` 后，
 **记得重建一次知识库**，`/api/kb/status` 会返回 `needs_rebuild: true` 提醒你，前端侧边栏也会显示警告。
 
 ---
@@ -406,16 +410,19 @@ python -m venv .venv
 ```
 
 **7) 启动时报 `WinError 1114 ... c10.dll`？**
-说明本机的 `torch` 装上了但加载不了（常见于缺少 VC++ 运行库或受限运行环境）。两种选择：
+说明当前进程环境无法加载 `torch` 的原生库——最常见的原因是**运行在受限沙箱/受限进程里**（例如被禁止创建命名管道、被限制加载 DLL），
+其次是系统缺少 VC++ 运行库。处理办法：
 
-- 推荐：安装 [Microsoft Visual C++ Redistributable (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe)，然后重建知识库以获得 `bge-m3` 的语义检索效果；
-- 或者：在 `.env` 里设 `EMBEDDING_ALLOW_DOWNLOAD=false`，直接使用内置轻量向量器（不用 torch，启动也不再等待模型加载）。
+- 首选：改用**普通终端**运行（`cmd`、PowerShell、VSCode 终端、Docker 容器），不要在被沙箱包裹的进程里启动；
+- 若确实缺运行库：安装 [Microsoft Visual C++ Redistributable (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe)，然后重建知识库以获得 `bge-m3` 的语义检索效果；
+- 兜底：在 `.env` 里设 `EMBEDDING_ALLOW_DOWNLOAD=false`，直接用内置轻量向量器（不用 torch，启动也不再等待模型加载）。
 
 无论哪种情况，项目都能正常启动和问答——Embedding 会自动降级。
 
 **8) 启动日志出现 `自动改用内置 NumPy 向量库`？**
-说明 chromadb 的原生引擎在本机不可用（写入会直接崩溃）。项目已在子进程里探测并自动切换到内置向量库，功能不受影响。
-想强制用 Chroma：修好依赖后设置 `VECTOR_BACKEND=chroma`（探测缓存文件 `vectorstore/.chroma_probe.json` 会按 chromadb 版本自动失效）。
+说明当前环境里 chromadb 的原生引擎不可用（写入会直接崩溃，同样多见于受限沙箱）。项目已在子进程里探测并自动切换到内置向量库，功能不受影响。
+换到普通终端后它会自动重新探测并使用 Chroma（探测缓存 `vectorstore/.chroma_probe.json` 对失败结果只缓存 6 小时，会自动失效）；
+也可用 `VECTOR_BACKEND=chroma|local` 强制指定。
 
 **9) 修改了 Embedding 模型后检索变差/报维度不一致？**
 必须重建知识库（`scripts/build_kb.py` 或前端「重建知识库」按钮），因为不同模型的向量维度不同。
@@ -425,21 +432,25 @@ python -m venv .venv
 
 ## 十、本次交付的验证情况
 
-已在 Windows + Python 3.13 + `.venv`（全部依赖只装在项目内）下实测通过：
+已在 Windows + Python 3.13 + `.venv`（全部依赖只装在项目内）下实测通过。
+
+**完整能力验证（普通终端环境，`bge-m3` + Chroma + 真实 LLM）**
 
 | 验证项 | 结果 |
 | --- | --- |
-| 6 个知识库文件切分 | ✅ 共 910 条，元数据字段零缺失（含 PDF） |
-| 知识库构建 | ✅ 910 条入库，约 22 秒 |
-| 后端启动与接口 | ✅ `/health`、`/api/kb/status`、`/api/datetime`、`/api/weather`、`/api/location`、`/api/profile`、`/api/chat/history` |
-| 完整 Agent 链路 | ✅ 意图识别 → 工具调用 → 改写 → 检索 → 摘要 → 回答（气温/湿度类问题自动调用位置/时间/天气工具） |
+| 6 个知识库文件切分 | ✅ 共 910 条，元数据字段零缺失（含 PDF：100 条） |
+| 知识库构建 | ✅ `bge-m3`（1024 维）向量化 910 条入 Chroma，CPU 约 250 秒 |
+| 语义检索质量 | ✅ 「机器人开机无反应」→ `故障排除.txt` 第 1 条；「这个月怎么保养」→ 前 5 条全部来自 `维护保养.txt`；「滤网多久换一次」→ `滤网应该多久更换？` |
+| 完整 Agent 链路 | ✅ 意图识别 → 工具调用 → 查询改写 → 混合检索 → 摘要 → 回答；湿度/天气类问题自动调用位置+时间+天气工具 |
+| 真实 LLM 回答 | ✅ 输出「结论 → 原因 → 操作步骤 → 注意事项 → 参考来源」结构，并结合用户画像（机型/地板/宠物）给个性化建议 |
 | 安全兜底 | ✅ 「电池鼓包了还能用吗」首句即提示立即停用、断电、联系售后 |
+| 后端接口 | ✅ `/health`、`/api/kb/status`、`/api/kb/rebuild`、`/api/datetime`、`/api/weather`、`/api/location`、`/api/profile`、`/api/chat/history` |
 | SSE 流式问答 | ✅ 事件序列 `start → delta... → sources → done` |
-| 前端 | ✅ Streamlit 启动正常，`AppTest` 无异常；模拟提问可流式渲染回答，工具调用与来源面板正常 |
-| 降级路径 | ⚠️ 本机 `torch`（`WinError 1114`）与 `chromadb` 原生写入（`0xC0000005`）不可用，已自动降级为内置向量器 + NumPy 向量库，全流程仍可跑通；在正常环境装好 VC++ 运行库后建议重建知识库以启用 `bge-m3` |
+| 前端 | ✅ Streamlit 正常启动，`AppTest` 无异常；可流式渲染回答，工具调用与参考来源面板正常 |
+| 依赖降级路径 | ✅ 在受限沙箱中会自动降级为内置向量器 + NumPy 向量库并照常问答（该降级在普通终端下不会被触发） |
 
-> 交付时 `vectorstore/` 内已包含用内置向量器构建好的知识库，可以直接启动使用；
-> 填写 `.env` 中的 `OPENAI_API_KEY` 后重启后端即可获得 LLM 总结式回答。
+> `vectorstore/`（Chroma 向量库 + BM25 语料）与 `.env` 均已被 `.gitignore` 排除，不会提交到仓库；
+> 克隆后按「五、构建知识库」执行一次即可生成属于自己的向量库，再填好 `.env` 中的 `OPENAI_API_KEY` 即可获得 LLM 总结式回答。
 
 ---
 
