@@ -1,0 +1,29 @@
+services:
+  backend:
+    build: ./backend
+    container_name: robot-cs-backend
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      # 容器内数据与向量库路径（与下面的 volume 对应）
+      DATA_RAW_DIR: /app/data/raw
+      CHROMA_PERSIST_DIR: /app/vectorstore
+      SQLITE_URL: sqlite:////app/data/robot_cs.db
+    volumes:
+      - ./data:/app/data
+      - ./vectorstore:/app/vectorstore
+      # 让容器内也能执行 python scripts/build_kb.py
+      - ./scripts:/app/scripts
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    container_name: robot-cs-frontend
+    ports:
+      - "8501:8501"
+    environment:
+      BACKEND_URL: http://backend:8000
+    depends_on:
+      - backend
+    restart: unless-stopped

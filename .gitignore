@@ -1,0 +1,55 @@
+# ---- Python 虚拟环境与缓存 ----
+.venv/
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# ---- 环境变量 / 密钥 ----
+.env
+.env.local
+.env.*.local
+
+# ---- 向量库 / 数据库 ----
+vectorstore/
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+
+# ---- 日志 ----
+*.log
+logs/
+
+# ---- 构建 / 测试产物 ----
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# ---- 模型缓存（如果下载到项目内）----
+models/
+.cache/
+huggingface/
+
+# ---- 临时目录（部分沙箱环境需要把 TMP 指到项目内）----
+.tmp/
+
+# ---- 编辑器 / 系统 ----
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini

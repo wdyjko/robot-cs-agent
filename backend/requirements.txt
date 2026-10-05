@@ -1,0 +1,29 @@
+# ---- Web 框架 ----
+fastapi
+uvicorn[standard]
+streamlit
+requests
+
+# ---- Agent 编排 / LLM ----
+langchain
+langchain-community
+langchain-core
+langchain-chroma
+langchain-openai
+langchain-text-splitters
+langgraph
+
+# ---- RAG / 向量库 / 检索 ----
+chromadb
+sentence-transformers
+langchain-huggingface
+rank_bm25
+pypdf
+
+# ---- 配置 / 存储 ----
+pydantic-settings
+sqlalchemy
+python-dotenv
+
+# ---- 测试（可选） ----
+httpx
