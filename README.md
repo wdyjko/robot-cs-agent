@@ -204,6 +204,8 @@ DEFAULT_CITY=杭州
 | `EMBEDDING_MODEL` | `BAAI/bge-m3` | 向量模型；加载失败自动降级为内置哈希向量器 |
 | `EMBEDDING_MODEL_PATH` | 空 | 指向本地模型目录，避免重复下载 |
 | `EMBEDDING_ALLOW_DOWNLOAD` | `true` | 为 `false` 时直接用内置哈希向量器（不需要 torch） |
+| `HF_HUB_OFFLINE` | `auto` | `auto` 时只要本地已有完整模型缓存就切离线模式，跳过逐文件联网检查（**能显著加快启动**）；也可强制 `true`/`false` |
+| `HF_ENDPOINT` | 空 | HuggingFace 镜像地址，如 `https://hf-mirror.com`（国内网络建议配置） |
 | `CHROMA_PERSIST_DIR` | `./vectorstore` | 向量库持久化目录 |
 | `CHROMA_COLLECTION` | `robot_customer_service` | 集合名称 |
 | `VECTOR_BACKEND` | `auto` | `auto` 自动探测 / `chroma` 强制 Chroma / `local` 内置 NumPy 向量库 |
@@ -428,6 +430,23 @@ python -m venv .venv
 必须重建知识库（`scripts/build_kb.py` 或前端「重建知识库」按钮），因为不同模型的向量维度不同。
 `/api/kb/status` 的 `needs_rebuild` 字段会告诉你是否需要重建。
 
+**10) 启动时卡在 `加载 Embedding 模型` 好几分钟？**
+这是 `huggingface_hub` 的**联网更新检查**导致的：它会对模型目录里的**每个文件**发一次 HTTP HEAD，
+当 huggingface.co 不可达时每个文件都要重试 5 次（退避最长 16 秒），累计就会卡住几分钟。
+
+本项目默认 `HF_HUB_OFFLINE=auto`：**只要检测到本地已有完整模型缓存，就自动切到离线模式**（实测启动从数分钟降到约 30 秒）。
+如果仍遇到卡顿，可以显式处理：
+
+```bat
+set HF_HUB_OFFLINE=1
+set TRANSFORMERS_OFFLINE=1
+```
+或者改用镜像站（首次下载模型时尤其有用）：
+
+```env
+HF_ENDPOINT=https://hf-mirror.com
+```
+
 ---
 
 ## 十、本次交付的验证情况
@@ -447,6 +466,7 @@ python -m venv .venv
 | 后端接口 | ✅ `/health`、`/api/kb/status`、`/api/kb/rebuild`、`/api/datetime`、`/api/weather`、`/api/location`、`/api/profile`、`/api/chat/history` |
 | SSE 流式问答 | ✅ 事件序列 `start → delta... → sources → done` |
 | 前端 | ✅ Streamlit 正常启动，`AppTest` 无异常；可流式渲染回答，工具调用与参考来源面板正常 |
+| 启动性能 | ✅ 模型已缓存时自动切 HF 离线模式，加载从「卡住数分钟」降到 **约 29 秒** |
 | 依赖降级路径 | ✅ 在受限沙箱中会自动降级为内置向量器 + NumPy 向量库并照常问答（该降级在普通终端下不会被触发） |
 
 > `vectorstore/`（Chroma 向量库 + BM25 语料）与 `.env` 均已被 `.gitignore` 排除，不会提交到仓库；

@@ -58,6 +58,10 @@ class Settings(BaseSettings):
     # 是否允许联网下载 embedding 模型；关闭后直接使用内置轻量向量器
     embedding_allow_download: bool = True
     embedding_dim: int = 384
+    # HuggingFace 离线模式：auto（本地有完整缓存就离线，避免逐文件联网检查拖慢启动）/ true / false
+    hf_hub_offline: str = "auto"
+    # HuggingFace 镜像地址，例如 https://hf-mirror.com（国内网络建议配置）
+    hf_endpoint: str = ""
 
     # ---------- Chroma ----------
     chroma_persist_dir: str = "./vectorstore"
