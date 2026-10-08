@@ -8,8 +8,9 @@ __pycache__/
 *$py.class
 *.so
 .Python
-build/
-dist/
+/backend/**/build/
+/build/
+/dist/
 *.egg-info/
 .eggs/
 pip-wheel-metadata/
@@ -20,7 +21,12 @@ pip-wheel-metadata/
 .env.*.local
 
 # ---- 向量库 / 数据库 ----
-vectorstore/
+# 注意两点：
+#   1) 必须加前导 /，否则会误伤 backend/app/vectorstore/、backend/app/models/ 等源码包目录；
+#   2) gitignore 不支持行尾注释，注释必须单独成行。
+/vectorstore/
+# 多套向量库目录（正常路径 / 降级路径对照，见 eval/README.md）
+/vectorstore_*/
 *.db
 *.sqlite
 *.sqlite3
@@ -40,9 +46,10 @@ htmlcov/
 .nox/
 
 # ---- 模型缓存（如果下载到项目内）----
-models/
-.cache/
-huggingface/
+# 同样必须根锚定，否则会忽略 backend/app/models/ 源码包
+/models/
+/.cache/
+/huggingface/
 
 # ---- 临时目录（部分沙箱环境需要把 TMP 指到项目内）----
 .tmp/
