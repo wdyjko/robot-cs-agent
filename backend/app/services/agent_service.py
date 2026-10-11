@@ -175,31 +175,33 @@ def _fallback_answer(state: AgentState) -> str:
 
     parts.append(f"关于「{question}」，知识库检索结果如下：")
     parts.append("")
-    parts.append(f"**结论**：{summary.get('summary') or '知识库中未检索到相关内容，建议咨询品牌官方售后。'}")
+    # 小标题统一写成 `**小标题：** 内容`：CommonMark 规定 `**` 作为右定界符时
+    # 后面紧跟非空白字符则不加粗，写成 `**结论**：` 会在页面上显示成字面星号。
+    parts.append(f"**结论：** {summary.get('summary') or '知识库中未检索到相关内容，建议咨询品牌官方售后。'}")
 
     steps = summary.get("steps") or []
     if steps:
         parts.append("")
-        parts.append("**可执行步骤 / 要点**：")
+        parts.append("**可执行步骤 / 要点：**")
         parts.extend(f"- {step}" for step in steps)
 
     # 安全提示统一在开头给出，这里过滤掉重复项
     warnings = [w for w in (summary.get("warnings") or []) if SAFETY_NOTICE not in str(w)]
     if warnings:
         parts.append("")
-        parts.append("**注意事项**：")
+        parts.append("**注意事项：**")
         parts.extend(f"- {warning}" for warning in warnings)
 
     env_text = _format_environment(state)
     if env_text and env_text != "（无实时环境信息）":
         parts.append("")
-        parts.append("**结合你当前环境**：")
+        parts.append("**结合你当前环境：**")
         parts.extend(f"- {line.strip('- ')}" for line in env_text.split("\n") if line.strip().startswith("-"))
 
     sources = state.get("sources") or []
     if sources:
         parts.append("")
-        parts.append("**参考来源**：")
+        parts.append("**参考来源：**")
         for index, source in enumerate(sources, start=1):
             label = f"{source.file or '知识库'} - {source.item_no}. {source.title}".strip(" -")
             parts.append(f"[{index}] {label}")

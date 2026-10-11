@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from collections.abc import Iterator
 from typing import Any
@@ -156,6 +157,104 @@ def refresh_kb_status() -> dict | None:
     if ok:
         st.session_state.kb_status = data
     return st.session_state.kb_status
+
+
+# ---------------------------------------------------------------------------
+# Markdown 兜底规范化
+#
+# 背景：模型常输出 `**结论：**知识库中……`（`**` 后面直接跟正文）。
+# CommonMark 规定 `**` 作为右定界符时**后面紧跟非空白字符则不加粗**，
+# 于是页面上会显示成字面星号。prompts.py 已在提示词里要求加空格，
+# 这里再做一层防御，兼容任意模型 / 历史消息。
+#
+# 两种常见写法都要处理：
+#   1) `**结论：**知识库……`  → 星号后缺空格
+#   2) `**结论**：知识库……`  → 冒号在加粗外面，星号后紧跟冒号，同样不加粗
+# ---------------------------------------------------------------------------
+# ① 把「加粗标记后面的冒号」挪进加粗内部：**结论**： → **结论：**
+#    注意必须把冒号一并捕获吃掉，否则会残留成 `**结论：**：`
+_BOLD_OUTER_COLON_RE = re.compile(r"\*\*([^*\n]{1,20})\*\*([：:])")
+# ② 给「**小标题：**」与后续正文之间补一个空格（标题类，含冒号）
+_BOLD_HEADING_RE = re.compile(r"\*\*([^*\n]{1,20}[：:])\*\*(?=\S)")
+# ③ 兜底：行首（含 `- ` 列表标记）的短加粗块后面紧跟正文时补空格。
+#    刻意锚定行首，避免给「请**立即停止使用**该机器人」这类句中加粗插入空格。
+#    这里不带 re.MULTILINE —— 行首与否由调用方逐行判断（见 normalize_markdown）。
+_BOLD_TAIL_RE = re.compile(r"^(\s*(?:[-*]\s+)?)\*\*([^*\n]{1,20})\*\*(?=[^\s，。；、！？：,.;:!?])")
+
+
+def normalize_markdown(text: str, at_line_start: bool = True) -> str:
+    """规范化 `**小标题**` 的写法，使其能正常渲染为加粗。
+
+    at_line_start 表示 text 的首字符是否处于「真正的行首」。
+    流式渲染时每个分块会单独调用本函数，分块起点未必是行首，
+    因此必须由调用方告知，否则会给句中加粗误插空格。
+    """
+    if not text or "**" not in text:
+        return text
+    text = _BOLD_OUTER_COLON_RE.sub(r"**\1\2**", text)
+    text = _BOLD_HEADING_RE.sub(r"**\1** ", text)
+
+    if not _BOLD_TAIL_RE.search(text):
+        return text
+
+    # 逐行处理：第 0 行只在确实处于行首时才套用规则③
+    lines = text.split("\n")
+    fixed = [
+        line if (index == 0 and not at_line_start) else _BOLD_TAIL_RE.sub(r"\1**\2** ", line)
+        for index, line in enumerate(lines)
+    ]
+    return "\n".join(fixed)
+
+
+def _safe_cut(buffer: str, at_line_start: bool = True) -> int:
+    """返回可以安全输出的前缀长度。
+
+    必须同时满足两点，否则流式结果会和整体规范化不一致：
+    1. 前缀里的 `**` 成对出现（不能把加粗标记切一半）；
+    2. 前缀**规范化之后**不以 `**` 结尾 —— 否则「`**标题：**` 后面要不要补空格」
+       取决于尚未到达的下一个字符，必须等它到齐再决定。
+    """
+    cut = len(buffer)
+    stripped = buffer.rstrip("*")
+    if len(stripped) != len(buffer):
+        cut = len(stripped)
+
+    prefix = buffer[:cut]
+    if prefix.count("**") % 2 == 1:
+        cut = prefix.rfind("**")
+
+    # 条件 2：回退到「以 ** 结尾的加粗块」之前
+    while cut > 0:
+        candidate = buffer[:cut]
+        if not normalize_markdown(candidate, at_line_start=at_line_start).endswith("**"):
+            break
+        opening = candidate.rfind("**", 0, len(candidate) - 2)
+        cut = opening if opening > 0 else 0
+
+    return max(cut, 0)
+
+
+def normalize_stream(chunks: Iterator[str]) -> Iterator[str]:
+    """流式规范化：按块产出，块与块之间不会截断加粗标记。
+
+    同时跟踪「当前块是否处于真正的行首」，让规则③只在行首生效。
+    """
+    buffer = ""
+    emitted = ""
+    at_line_start = True
+
+    for chunk in chunks:
+        buffer += chunk or ""
+        cut = _safe_cut(buffer, at_line_start=at_line_start)
+        if cut <= 0:
+            continue
+        pending, buffer = buffer[:cut], buffer[cut:]
+        yield normalize_markdown(pending, at_line_start=at_line_start)
+        emitted += pending
+        at_line_start = emitted.endswith("\n")
+
+    if buffer:
+        yield normalize_markdown(buffer, at_line_start=at_line_start)
 
 
 # ---------------------------------------------------------------------------
@@ -321,7 +420,8 @@ def render_message(message: dict[str, Any]) -> None:
     """渲染一条历史消息。"""
     avatar = ":material/person:" if message["role"] == "user" else ":material/robot_2:"
     with st.chat_message(message["role"], avatar=avatar):
-        st.markdown(message["content"])
+        content = message["content"]
+        st.markdown(normalize_markdown(content) if message["role"] == "assistant" else content)
         if message["role"] == "assistant":
             render_extras(message)
 
@@ -357,7 +457,7 @@ def ask(question: str) -> None:
     with st.chat_message("assistant", avatar=":material/robot_2:"):
         with st.status(":shimmer[正在检索知识库并生成回答]", type="compact", expanded=False) as status:
             st.caption("意图识别 → 工具调用 → 混合检索（向量 + BM25）→ 摘要 → 生成回答")
-        answer = st.write_stream(stream_answer(build_payload(question), sink))
+        answer = st.write_stream(normalize_stream(stream_answer(build_payload(question), sink)))
 
         if sink.get("error") and not answer:
             st.error(sink["error"])
