@@ -1,6 +1,7 @@
 # 智能扫地机器人客服 Agent
 
-基于 **FastAPI + LangGraph + LangChain + Chroma + Streamlit** 的扫地 / 扫拖一体机器人智能客服。
+基于 **FastAPI + LangGraph + LangChain + Streamlit** 的扫地 / 扫拖一体机器人智能客服。
+向量库支持 **Chroma / 内置 NumPy 向量库**（自动探测降级），向量化支持 **云端 Embedding / 本地 bge-m3 / 内置哈希向量器**（逐级降级）。
 
 支持故障排查、维护保养、使用技巧、选购建议，并结合**用户所在地、当前时间、天气、季节、湿度**给出针对性建议；
 所有回答**先检索知识库、再总结、后生成**，不编造知识库中不存在的内容。
@@ -18,6 +19,7 @@
 | 环境适配 | 湿度 >80% 少湿拖、雨天/回南天除湿、>35℃ 避免直射充电、<5℃ 静置 30 分钟、沙尘天关窗 + HEPA、木地板低水量、宠物家庭防缠绕 |
 | 安全兜底 | 电池鼓包 / 漏液 / 烧焦味 / 主板短路 → 强制提示**立即停用、断电、联系售后** |
 | 记忆 | SQLite 保存多轮对话与用户画像（机型 / 地板 / 宠物 / 婴儿） |
+| 向量化可选 | 云端 Embedding（OpenAI 兼容，低配机器推荐）→ 本地 `bge-m3` → 内置哈希向量器，逐级自动降级 |
 | 降级可用 | 未配置 LLM Key 或天气 Key 时自动走纯检索 / mock 数据，项目始终可跑通 |
 
 ---
@@ -43,7 +45,8 @@ robot-cs-agent/
 │  │  │  ├─ agent_service.py     # LangGraph 六节点编排，run(req) -> ChatResponse
 │  │  │  ├─ summary_service.py   # 检索片段 → 结构化 JSON（summary/steps/warnings/sources）
 │  │  │  ├─ memory_service.py    # 对话历史 + 用户画像（SQLite）
-│  │  │  ├─ embeddings.py        # Embedding 工厂（bge-m3，失败自动降级）
+│  │  │  ├─ embeddings.py        # Embedding 工厂（云端 → bge-m3 → 哈希，逐级降级）
+│  │  │  ├─ api_embeddings.py    # 云端 Embedding（OpenAI 兼容 / DashScope 原生接口）
 │  │  │  ├─ llm_service.py       # LLM 工厂（OpenAI 兼容，未配 Key 优雅降级）
 │  │  │  ├─ vectorstore_service.py  # 向量库后端选择（子进程探测 Chroma / 自动切本地）
 │  │  │  └─ local_vectorstore.py    # 内置 NumPy 向量库（Chroma 不可用时的兜底）
@@ -53,7 +56,7 @@ robot-cs-agent/
 │  │  │  ├─ datetime_tool.py     # get_current_datetime
 │  │  │  ├─ profile.py           # get_user_profile
 │  │  │  └─ kb_tool.py           # search_knowledge_base
-│  │  ├─ models/
+│  │  ├─ models/                 # 源码包：Pydantic 模型 + SQLAlchemy 表（**不是**模型权重目录）
 │  │  │  ├─ schemas.py           # Pydantic 请求/响应模型
 │  │  │  └─ db.py                # SQLAlchemy：chat_history、user_profile
 │  │  └─ vectorstore/            # 占位目录（真实持久化目录见 CHROMA_PERSIST_DIR）
@@ -65,7 +68,7 @@ robot-cs-agent/
 ├─ data/
 │  ├─ raw/                       # 6 份知识库文件
 │  └─ processed/
-├─ vectorstore/                  # Chroma 持久化目录（.gitignore 已忽略）
+├─ vectorstore/                  # 向量库持久化目录（根目录的 /vectorstore/ 已被 .gitignore 忽略）
 ├─ eval/                         # 检索效果评估：脚本 + 结果（唯一的效果证据来源）
 │  ├─ README.md                  #   评测集构造方法、复现步骤、结论
 │  ├─ eval_retrieval.py          #   逐题明细（可切换向量器 / 向量库）
@@ -83,6 +86,24 @@ robot-cs-agent/
 └─ README.md
 ```
 
+> ⚠️ **`.gitignore` 里的目录规则必须带前导 `/`（根锚定）**，否则会误伤同名源码包：
+>
+> ```gitignore
+> /vectorstore/     # ✅ 只忽略根目录下的向量库
+> /vectorstore_*/   # ✅ 多套向量库目录（评测对照用）
+> /models/          # ✅ 只忽略根目录下的模型权重缓存
+>
+> vectorstore/      # ❌ 会匹配任意层级，误伤 backend/app/vectorstore/
+> models/           # ❌ 会匹配任意层级，误伤 backend/app/models/（源码包！）
+> ```
+>
+> `models/` 这种**不带前导斜杠**的写法在 gitignore 语义里会匹配**任意深度**的同名目录。
+> 本项目 `backend/app/models/` 是**应用自己的 Python 包**（`schemas.py` / `db.py`），
+> 一旦被忽略，克隆仓库后后端会直接 `ModuleNotFoundError: No module named 'app.models'` 起不来。
+> 同理 `backend/app/vectorstore/` 也是源码目录，不能写成裸 `vectorstore/`。
+>
+> 另外：**gitignore 不支持行尾注释**，注释必须单独成行（`/models/  # 注释` 会被当成路径的一部分）。
+
 ---
 
 ## 三、环境配置说明
@@ -92,9 +113,19 @@ robot-cs-agent/
 | 项目 | 要求 |
 | --- | --- |
 | Python | **3.10 ~ 3.13**（推荐 3.11，依赖预编译包最全） |
-| 内存 | ≥ 8 GB（加载 bge-m3 时建议 16 GB） |
-| 磁盘 | ≥ 6 GB（依赖约 3 GB + Embedding 模型约 2.3 GB） |
-| 网络 | 首次安装依赖与下载 Embedding 模型需要联网 |
+| 内存 | ≥ 8 GB（加载本地 bge-m3 时建议 16 GB） |
+| 磁盘 | ≥ 6 GB（依赖约 3 GB + 本地 Embedding 模型约 2.3 GB） |
+| 网络 | 首次安装依赖与下载本地 Embedding 模型需要联网（用云端 Embedding 时只需能访问接口） |
+
+> **内存不足 8 GB 的机器也有可用路径**（例如 2 核 2G 的 ECS）：**默认配置会尝试加载本地
+> bge-m3（2.3 GB 权重，进程内存超 3 GB）而被 OOM Killer 杀掉**，此时请改用下面两种方案之一：
+>
+> | 方案 | 配置 | 检索质量 | 说明 |
+> | --- | --- | --- | --- |
+> | **① 云端 Embedding（推荐）** | 填 `EMBEDDING_API_KEY` 等（见 3.4） | **优于**本地 bge-m3（可用生产级向量模型） | 不需要 torch，内存占用可忽略；建库与提问各需一次 HTTP 请求 |
+> | ② 内置哈希向量器 | `EMBEDDING_ALLOW_DOWNLOAD=false` | 明显下降（**无语义能力**） | 零依赖、建库约 12 秒；关键词型提问尚可，语义型提问（如「这个月怎么保养」）会漏召回 |
+>
+> 两种方案的完整配置见 [3.5 关键环境变量一览](#35-关键环境变量一览) 与 [`.env.example`](.env.example) 末尾的「场景组合参考」。
 
 > **本项目强制使用项目根目录下的 `.venv`，所有依赖只安装到 `.venv` 中，不做全局安装。**
 
@@ -134,6 +165,10 @@ setup.bat --skip-torch    REM 已装过 torch，跳过以节省时间
 bash setup.sh --build-kb
 bash setup.sh --skip-torch
 ```
+
+> 💡 **只用云端 Embedding（低配机器 / 不用本地模型）时可以加 `--skip-torch`**：
+> 云端方案不加载 sentence-transformers，torch 装不装都不影响运行，能省下约 200 MB 与安装时间。
+> 内置哈希向量器方案同理。
 
 ### 3.3 手动安装（等价步骤）
 
@@ -201,6 +236,42 @@ DEFAULT_CITY=杭州
 > **不配置 Key 也能跑**：LLM 相关能力自动降级为「知识库检索原文整理」，天气使用 mock 数据，
 > 界面会明确提示当前处于降级模式，绝不编造内容。
 
+#### 3.4.1 可选：改用云端 Embedding（低配机器的推荐方案）
+
+本地 bge-m3 需要约 2.3 GB 显存/内存，**2 核 2G 的机器加载会被 OOM 杀掉**。填了
+`EMBEDDING_API_KEY` 后，`get_embeddings()` 会**优先**走云端接口，不再加载本地模型；
+云端不可用时自动回落到原有逻辑（本地模型 / 内置向量器），**不会让服务起不来**。
+
+```env
+# ---- 云端 Embedding（OpenAI 兼容接口，可选）----
+EMBEDDING_API_KEY=sk-你的百炼Key
+# 必须带 /compatible-mode/v1 后缀，否则请求路径不对
+EMBEDDING_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
+EMBEDDING_API_MODEL=text-embedding-v4
+EMBEDDING_API_BATCH=10                             # 单次最多传几条文本（v3/v4 上限为 10）
+EMBEDDING_API_DIM=                                 # 留空用模型默认维度
+EMBEDDING_API_TIMEOUT=60
+```
+
+**可选模型**（阿里云百炼 OpenAI 兼容接口，见[官方文档](https://help.aliyun.com/zh/model-studio/embedding-interfaces-compatible-with-openai)）：
+
+| 模型名 | 默认维度 | 可选维度 | 单次最大行数 |
+| --- | --- | --- | --- |
+| `qwen3.7-text-embedding` | 1024 | 2560 / 2048 / 1536 / 1024 / 768 / 512 / 256 | 20 |
+| `qwen3.7-text-embedding-flash` | 1024 | 1024 / 768 / 512 / 256 | 20 |
+| `text-embedding-v4` | 1024 | 2048 / 1536 / 1024 / 768 / 512 / 256 / 128 / 64 | 10 |
+| `text-embedding-v3` | 1024 | 1024 / 768 / 512 / 256 / 128 / 64 | 10 |
+
+也可以填**任意 OpenAI 兼容**的 Embedding 服务（如 OpenAI 的 `text-embedding-3-small`），
+把 `EMBEDDING_API_BASE` 换成对应的 `.../v1` 即可。
+
+> ⚠️ **两点注意**：
+> 1. `EMBEDDING_API_BASE` 一定要带 `/compatible-mode/v1` 后缀。百炼**业务空间专属域名**
+>    （`https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com`）也是 OpenAI 兼容入口，可以配合
+>    该后缀使用；但**不要**直接把 `/embeddings` 拼在裸域名后面（会 404）。
+> 2. **换了 Embedding 模型（或维度）必须重建知识库**，否则新旧向量维度不一致会检索失败。
+>    `/api/kb/status` 的 `needs_rebuild` 会提示你。
+
 ### 3.5 关键环境变量一览
 
 | 变量 | 默认值 | 说明 |
@@ -208,14 +279,20 @@ DEFAULT_CITY=杭州
 | `OPENAI_API_KEY` | 空 | 留空则禁用 LLM（有 mock 兜底） |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI 兼容地址 |
 | `LLM_MODEL` | `gpt-4o-mini` | 模型名 |
-| `EMBEDDING_MODEL` | `BAAI/bge-m3` | 向量模型；加载失败自动降级为内置哈希向量器 |
+| `EMBEDDING_MODEL` | `BAAI/bge-m3` | 本地向量模型；加载失败自动降级为内置哈希向量器 |
 | `EMBEDDING_MODEL_PATH` | 空 | 指向本地模型目录，避免重复下载 |
 | `EMBEDDING_ALLOW_DOWNLOAD` | `true` | 为 `false` 时直接用内置哈希向量器（不需要 torch） |
+| `EMBEDDING_API_KEY` | 空 | **填了就走云端 Embedding**（优先于本地模型），低配机器推荐 |
+| `EMBEDDING_API_BASE` | 百炼 compatible-mode | 云端 Embedding 的 OpenAI 兼容地址，须带 `/compatible-mode/v1` |
+| `EMBEDDING_API_MODEL` | `text-embedding-v4` | 云端向量模型名（可选 `qwen3.7-text-embedding-flash` 等） |
+| `EMBEDDING_API_BATCH` | `10` | 云端单次请求最多几条文本（v3/v4 上限为 10） |
+| `EMBEDDING_API_DIM` | `0` | 云端向量维度；`0` 表示用模型默认维度 |
+| `EMBEDDING_API_TIMEOUT` | `60` | 云端 Embedding 单次请求超时（秒） |
 | `HF_HUB_OFFLINE` | `auto` | `auto` 时只要本地已有完整模型缓存就切离线模式，跳过逐文件联网检查（**能显著加快启动**）；也可强制 `true`/`false` |
 | `HF_ENDPOINT` | 空 | HuggingFace 镜像地址，如 `https://hf-mirror.com`（国内网络建议配置） |
 | `CHROMA_PERSIST_DIR` | `./vectorstore` | 向量库持久化目录 |
 | `CHROMA_COLLECTION` | `robot_customer_service` | 集合名称 |
-| `VECTOR_BACKEND` | `auto` | `auto` 自动探测 / `chroma` 强制 Chroma / `local` 内置 NumPy 向量库 |
+| `VECTOR_BACKEND` | `auto` | `auto` 自动探测 / `chroma` 强制 Chroma / `local` 内置 NumPy 向量库。**已确定不用 chromadb 时建议显式设 `local`**：`auto` 会在子进程里真跑一次 chromadb 写入+查询来探测可用性，虽稳健但属于多余的启动开销 |
 | `DATA_RAW_DIR` | `./data/raw` | 知识库原始文件目录 |
 | `SQLITE_URL` | `sqlite:///./robot_cs.db` | 记忆库（自动转成项目内绝对路径） |
 | `WEATHER_API_KEY` | 空 | 留空则天气走 mock |
@@ -229,7 +306,7 @@ DEFAULT_CITY=杭州
 
 | 组件 | 受限环境下的表现 | 本项目的处理方式 |
 | --- | --- | --- |
-| `torch` / `sentence-transformers` | `WinError 1114 动态链接库(DLL)初始化例程失败`（加载 `c10.dll` 失败） | Embedding 自动降级为内置 `HashingEmbeddings`；`langchain_text_splitters` / `langchain_community.document_loaders` 改为可选依赖，改用内置的递归切分器与 pypdf 加载器 |
+| `torch` / `sentence-transformers` | `WinError 1114 动态链接库(DLL)初始化例程失败`（加载 `c10.dll` 失败） | Embedding 自动降级为内置 `HashingEmbeddings`（配置了云端 Embedding 时则直接走云端，根本不会碰 torch）；`langchain_text_splitters` / `langchain_community.document_loaders` 改为可选依赖，改用内置的递归切分器与 pypdf 加载器 |
 | `chromadb` 原生引擎 | 写入时进程直接**访问违例崩溃**（`0xC0000005`），`try/except` 抓不住 | `VECTOR_BACKEND=auto`（默认）会在**子进程**里探测一次 chromadb，探测失败就自动切到内置 NumPy 向量库（`<collection>.vectors.npy` + `<collection>.records.json`） |
 | `onnxruntime` | 导入即崩溃 | 代码从不使用 Chroma 的默认 ONNX Embedding，始终注入自己的 Embedding 函数 |
 | LLM 未配置或调用失败 | 无法总结/生成自然回答 | 仍会检索知识库并把原文要点整理成结构化回答，并**区分提示**「未配置 Key」与「调用失败/超时」，绝不编造 |
@@ -275,6 +352,9 @@ REM Windows
 ```
 
 首次运行会下载 `BAAI/bge-m3`（约 2.3 GB），请耐心等待；脚本会打印**每个文件的切分条数**与**检索验证结果**。
+
+> 用云端 Embedding 时**不会**下载模型：910 条约 1~2 分钟（每批 10 条 ≈ 91 次请求）；
+> 用内置哈希向量器约 12 秒。改过 Embedding 模型或维度后**必须重新执行本脚本**。
 
 本项目的切分结果是（6 个文件共 **910 条**，每条都带 `source_file` / `category` / `item_no` / `title` / `tags`）：
 
@@ -372,7 +452,14 @@ curl -X POST http://localhost:8000/api/chat \
 
 ## 七、Docker 部署
 
+> **必须在项目根目录执行 `docker compose`**：`docker-compose.yml` 里的
+> `build: ./backend`、`env_file: .env`、`volumes: - ./data:/app/data` 都是**相对路径**，
+> 换目录执行会解析到错误位置（典型报错 `env file ... not found` 或挂载出空目录）。
+> 宝塔面板等「容器编排」功能会把 yaml 存到自己的目录再执行，因此**不要**直接用面板的
+> 编排功能，请 SSH 到项目根目录用官方 CLI；或把相对路径改成绝对路径后再粘贴。
+
 ```bash
+cd robot-cs-agent         # ← 必须在项目根目录
 cp .env.example .env      # 填好 Key
 docker compose up -d --build
 ```
@@ -388,6 +475,50 @@ docker compose down
 ```
 
 `docker-compose.yml` 会把 `./data` 和 `./vectorstore` 挂载进容器，重建容器不会丢失知识库与向量数据。
+
+### 7.1 国内网络构建加速
+
+两个 Dockerfile 默认已使用**阿里云公网镜像源**（pip），并且 torch 走
+`mirrors.aliyun.com/pytorch-wheels/cpu`（失败自动回退官方源）。
+阿里云 ECS 内网可换成更快的内网地址（**注意 `mirrors.cloud.aliyuncs.com` 只提供 HTTP，
+写成 https 会因证书主机名不匹配而失败**）：
+
+```bash
+docker compose build \
+  --build-arg PIP_INDEX_URL=http://mirrors.cloud.aliyuncs.com/pypi/simple/ \
+  --build-arg PIP_TRUSTED_HOST=mirrors.cloud.aliyuncs.com
+```
+
+也可以把上面两个 build-arg 写进 `docker-compose.yml` 的 `build.args`，避免每次手输。
+仓库里刻意**不硬编码内网地址**（非阿里云环境不可用）。
+
+### 7.2 镜像体积与构建耗时
+
+后端 Dockerfile 已做两项精简：
+
+- **不再安装 `build-essential` / `gcc`**（省约 88 MB）。`chromadb` 的原生依赖
+  `chroma-hnswlib` 以及 numpy / torch 在 amd64 与 arm64 上都有现成 manylinux wheel，
+  pip 不会走源码编译。若你的平台确实缺 wheel（构建时报 `gcc: not found`），
+  按 Dockerfile 里的注释把那两行放回来即可。
+- **健康检查改用 Python 自带的 `urllib`**，不再为一次探活安装 `curl`。
+- `backend/requirements.txt` **不再包含 `streamlit`**（后端代码从未 import 它，
+  前端镜像单独安装），省掉 pyarrow / pandas / pillow 等重型依赖链。
+
+> **想进一步瘦身**：若确定不使用本地 bge-m3 与 Chroma（即
+> `EMBEDDING_ALLOW_DOWNLOAD=false` 或配置了云端 Embedding，且 `VECTOR_BACKEND=local`），
+> 可从 `backend/requirements.txt` 移除 `torch`、`sentence-transformers`、`chromadb`、
+> `langchain-huggingface`、`langchain-chroma`（这些包在代码里都是**函数内延迟导入**，
+> 不用就完全不会触发）。代价是失去本地模型能力，请按需取舍。
+
+### 7.3 改代码 vs 改配置：两种不同的生效方式
+
+| 改动 | 生效方式 | 原因 |
+| --- | --- | --- |
+| 改了 `.env` | `docker compose up -d --force-recreate` | `.env` 是通过 compose 的 `env_file` 注入的**环境变量**。容器内 `config.py` 由 `__file__` 反推的项目根目录是 `/`，**应用不会去读挂载的 `.env` 文件**，所以单纯 `restart` 不生效 |
+| 改了代码 | `docker compose up -d --build` | `COPY . /app` 在**构建期**执行，只重建容器不会带上新代码 |
+
+> 新增配置项若只改 `.env` 而没在 `config.py` 里声明，pydantic-settings 会**静默忽略**
+> （不报错但完全不生效）——排查时容易误判。
 
 ---
 
@@ -419,6 +550,25 @@ docker compose down
 ```env
 EMBEDDING_MODEL_PATH=D:/models/bge-m3
 ```
+
+> 注意这里的 `D:/models/bge-m3` 只是**示例路径**：`models/` 在 `.gitignore` 里指的是
+> **根目录下的模型权重缓存**（`/models/`，根锚定），与源码包 `backend/app/models/` 无关。
+> 把权重放在仓库外的任意目录更稳妥。
+
+**2.1) 内存只有 2G，加载 bge-m3 就被 OOM 杀掉怎么办？**
+见 [3.1 前置要求](#31-前置要求) 的降级路径：**推荐配置云端 Embedding**（填 `EMBEDDING_API_KEY`，
+内存占用可忽略且语义质量更好），完全离线时才用内置哈希向量器（关键词型提问尚可，
+「这个月怎么保养」这类语义型提问会漏召回）。配置方法见 [3.4.1](#341-可选改用云端-embedding低配机器的推荐方案)。
+
+**2.2) 配了 `EMBEDDING_API_KEY` 但看起来没生效？**
+按顺序排查：
+
+- 容器部署时 `.env` 是**环境变量注入**，改完要 `docker compose up -d --force-recreate`（`restart` 不生效）；
+- 新增配置项必须在 `config.py` 里**声明过**，否则 pydantic-settings 会静默忽略；
+- 启动日志会打印实际生效的后端：`使用云端 Embedding 接口: <模型> @ <地址>`；
+  也可直接查 `GET /api/kb/status` 的 `embedding_backend`（云端方案形如 `OpenAICompatEmbeddings:模型名`）；
+- 云端不可达（Key 错、模型名错、额度用尽、外网不通）时会**自动回落**到本地模型/哈希向量器并打 WARNING，
+  所以"没报错"不等于"生效了"，请看日志确认。
 
 **3) 知识库状态显示 0 条？**
 先执行 `scripts/build_kb.py`；若 `data/raw` 文件缺失，请确认 6 份知识库文件已放入该目录。
@@ -475,6 +625,31 @@ set TRANSFORMERS_OFFLINE=1
 HF_ENDPOINT=https://hf-mirror.com
 ```
 
+**11) 回答里的小标题显示成字面 `**`（没有加粗）？**
+这是 Markdown 的规则问题：`**` 作为**右定界符**时，后面**紧跟非空白字符则不生效**。
+`**结论：**知识库中……` 里 `**` 后面直接是「知」，于是星号原样显示。
+
+本项目做了**两层处理**，正常情况不会再出现：
+
+1. **治本**：`core/prompts.py` 的输出格式要求里明确规定小标题写成 `**小标题：** 内容`，
+   `**` 与正文之间必须有一个空格；
+2. **兜底**：前端渲染前会规范化一次（`streamlit_app.py` 的 `normalize_markdown`），
+   兼容任意模型的输出与历史消息，包括 `**结论**：正文` 这种冒号写在加粗外面的写法。
+   流式渲染时也做了跨分块保护，不会因为 `**` 恰好被切在两个数据块之间而漏掉。
+
+**12) 克隆仓库后后端起不来，报 `ModuleNotFoundError: No module named 'app.models'`？**
+这是历史版本 `.gitignore` 用裸 `models/` 规则误伤了源码包 `backend/app/models/`，导致
+`schemas.py` / `db.py` 没被提交。**当前版本已修复**（规则改成根锚定的 `/models/`，
+应用包已纳入版本控制）。如果你从旧提交克隆，请拉取最新 `main`；详见
+[二、目录结构](#二目录结构) 下的 `.gitignore` 根锚定说明。
+
+自检一条命令即可确认：
+
+```bash
+git ls-files backend/app/models
+# 期望看到：__init__.py  db.py  schemas.py
+```
+
 ---
 
 ## 十、本次交付的验证情况
@@ -507,8 +682,11 @@ HF_ENDPOINT=https://hf-mirror.com
 | 前端 | ✅ Streamlit 正常启动，`AppTest` 无异常；可流式渲染回答，工具调用与参考来源面板正常 |
 | 启动性能 | ✅ 模型已缓存时自动切 HF 离线模式，加载从「卡住数分钟」降到 **约 29 秒** |
 | 依赖降级路径 | ✅ 在受限沙箱中会自动降级为内置向量器 + NumPy 向量库并照常问答（该降级在普通终端下不会被触发） |
+| 云端 Embedding | ✅ 双返回结构（OpenAI `data` / DashScope `output.embeddings`）解析、乱序按序号校正、分批、4xx 不重试、5xx 退避重试、云端不可达自动回落（均有单元级验证） |
+| 回答加粗渲染 | ✅ `**结论：**正文` 经规范化后右定界符后为空白，可正常加粗；流式在任意位置切分结果一致，且不误伤句中加粗 |
 
-> `vectorstore/`（Chroma 向量库 + BM25 语料）与 `.env` 均已被 `.gitignore` 排除，不会提交到仓库；
+> `vectorstore/`（向量库 + BM25 语料）与 `.env` 均已被 `.gitignore` 排除（注意规则是**根锚定**的
+> `/vectorstore/`，不会误伤 `backend/app/vectorstore/`），不会提交到仓库；
 > 克隆后按「五、构建知识库」执行一次即可生成属于自己的向量库，再填好 `.env` 中的 `OPENAI_API_KEY` 即可获得 LLM 总结式回答。
 
 ---
