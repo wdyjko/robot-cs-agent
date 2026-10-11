@@ -1,9 +1,17 @@
 # 智能扫地机器人客服 Agent —— 前端镜像（Streamlit）
 FROM python:3.11-slim
 
+# 国内镜像源（构建加速）。默认阿里云公网；ECS 内网可换成
+#   --build-arg PIP_INDEX_URL=http://mirrors.cloud.aliyuncs.com/pypi/simple/ \
+#   --build-arg PIP_TRUSTED_HOST=mirrors.cloud.aliyuncs.com
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+ARG PIP_TRUSTED_HOST=mirrors.aliyun.com
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
+    PIP_INDEX_URL=${PIP_INDEX_URL} \
+    PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST} \
     LANG=C.UTF-8 \
     TZ=Asia/Shanghai
 

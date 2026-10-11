@@ -1,7 +1,6 @@
 # ---- Web 框架 ----
 fastapi
 uvicorn[standard]
-streamlit
 requests
 
 # ---- Agent 编排 / LLM ----
@@ -17,6 +16,8 @@ langgraph
 chromadb
 sentence-transformers
 langchain-huggingface
+# 内置 NumPy 向量库（local_vectorstore.py）直接 import numpy，显式声明避免依赖传递变化
+numpy
 rank_bm25
 pypdf
 
@@ -27,3 +28,6 @@ python-dotenv
 
 # ---- 测试（可选） ----
 httpx
+
+# 注意：后端不使用 streamlit（前端镜像 frontend/Dockerfile 单独安装），
+# 因此这里不声明，避免后端镜像多装 pyarrow / pandas / pillow 等重型依赖。
