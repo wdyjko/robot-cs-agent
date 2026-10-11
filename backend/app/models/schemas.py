@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ChatRequest(BaseModel):
@@ -49,7 +49,14 @@ class ChatResponse(BaseModel):
 
 
 class KBStatus(BaseModel):
-    """知识库状态。"""
+    """知识库状态。
+
+    允许额外字段（extra="allow"）：`rag_service.get_status()` 会返回一些条件出现的键
+    （如 `built_backend`、`built_vector_backend`），未来还可能继续增加。
+    这里放宽约束，避免状态接口因为多出一个字段就 500。
+    """
+
+    model_config = ConfigDict(extra="allow")
 
     collection: str
     document_count: int

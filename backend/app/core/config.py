@@ -63,6 +63,17 @@ class Settings(BaseSettings):
     # HuggingFace 镜像地址，例如 https://hf-mirror.com（国内网络建议配置）
     hf_endpoint: str = ""
 
+    # ---------- 云端 Embedding（OpenAI 兼容接口，可替代本地 bge-m3）----------
+    # 配置了 embedding_api_key 后，get_embeddings() 会优先走云端接口，
+    # 不再加载本地模型（2 核 2G 等内存吃紧的机器强烈建议这样用）。
+    # 注意：embedding_api_dim 与建库时的维度必须一致，换模型后需要重建知识库。
+    embedding_api_key: str = ""
+    embedding_api_base: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    embedding_api_model: str = "text-embedding-v4"
+    embedding_api_batch: int = 10       # 单次请求最多传几条文本（v3/v4 上限为 10）
+    embedding_api_dim: int = 0          # 0 表示使用模型默认维度
+    embedding_api_timeout: int = 60
+
     # ---------- Chroma ----------
     chroma_persist_dir: str = "./vectorstore"
     chroma_collection: str = "robot_customer_service"

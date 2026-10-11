@@ -138,10 +138,42 @@ def _build_hf_embeddings(model_name: str):
     return embeddings
 
 
+def _build_api_embeddings() -> Embeddings | None:
+    """构造云端 Embedding（OpenAI 兼容接口）并做一次真实调用自检。
+
+    自检失败的常见原因：Key 错误、模型名不对、额度用尽、服务器访问不了外网。
+    这种情况下返回 None，由 get_embeddings() 走原有降级链路，绝不让服务起不来。
+    """
+    from .api_embeddings import build_api_embeddings
+
+    embeddings = build_api_embeddings()
+    logger.info("使用云端 Embedding 接口: %s @ %s", embeddings.model, embeddings.base_url)
+    probe = embeddings.embed_query("滤网多久更换一次")
+    logger.info("云端 Embedding 自检通过，向量维度=%d", len(probe))
+    return embeddings
+
+
 @lru_cache(maxsize=1)
 def get_embeddings() -> Embeddings:
-    """返回单例 Embedding 实例（带降级）。"""
+    """返回单例 Embedding 实例（带降级）。
+
+    优先级：
+    1. 配置了 EMBEDDING_API_KEY → 云端 Embedding 接口（OpenAI 兼容，如阿里云百炼）
+    2. EMBEDDING_ALLOW_DOWNLOAD=false → 内置哈希向量器
+    3. 本地 sentence-transformers 模型（默认 bge-m3）；失败时仍降级到哈希向量器
+    """
     model_name = (settings.embedding_model_path or "").strip() or settings.embedding_model
+
+    # 1) 云端 Embedding 接口（不需要 torch，也不需要下载 2.3GB 模型）
+    try:
+        from .api_embeddings import is_api_embedding_configured
+
+        if is_api_embedding_configured():
+            api_embeddings = _build_api_embeddings()
+            if api_embeddings is not None:
+                return api_embeddings
+    except Exception as exc:  # noqa: BLE001 - 云端不可用不能让服务起不来
+        logger.warning("云端 Embedding 不可用（%s），改用本地向量方案", exc)
 
     # 用户显式关闭时直接使用内置向量器（例如环境里 torch 不可用，省去报错与等待）
     if not settings.embedding_allow_download:
@@ -183,8 +215,23 @@ def get_embedding_backend_name() -> str:
 def get_embedding_description() -> dict[str, Any]:
     """给 /api/kb/status 和前端展示用的描述信息。"""
     backend = get_embeddings()
+    local_model = (settings.embedding_model_path or "").strip() or settings.embedding_model
+
+    try:
+        from .api_embeddings import OpenAICompatEmbeddings
+    except Exception:  # noqa: BLE001 - 模块缺失时按原逻辑展示
+        OpenAICompatEmbeddings = None  # type: ignore[assignment,misc]
+
+    if OpenAICompatEmbeddings is not None and isinstance(backend, OpenAICompatEmbeddings):
+        # backend 里带上模型名：以后换 embedding 模型时，needs_rebuild 能正确置为 true
+        return {
+            "backend": f"{type(backend).__name__}:{backend.model}",
+            "model": backend.model,
+            "degraded": False,
+        }
+
     return {
         "backend": type(backend).__name__,
-        "model": (settings.embedding_model_path or "").strip() or settings.embedding_model,
+        "model": local_model,
         "degraded": isinstance(backend, HashingEmbeddings),
     }
